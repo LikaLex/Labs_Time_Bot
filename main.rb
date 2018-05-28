@@ -78,7 +78,8 @@ class Semester < BaseClass
             @end_date = Date.parse(answer.text)
 
             if time_left(@start_date, @end_date) == true then
-            send_message("Понял, на все про все у нас:#{@remainder}")
+              @redis.hmset("#{@user_id}-date", "begin", @start_date, "end", @end_date)
+            send_message("Понял, на все про все у нас:#{@remainder} дней")
             else
               send_message('Время вышло')
             end
@@ -102,6 +103,7 @@ class Subject < BaseClass
         if !/\d+/.match(answer.text) == true then send_message("#{@name}, введи число!")
         else
           send_message('ОК.')
+          @redis.hmset("#{@user_id}-subj", @task, answer.text)
           break
         end
       end
@@ -112,9 +114,28 @@ end
 
 
 
+class Status < BaseClass
+  def run
+    if @redis.hget("#{@user_id}-date", "begin").nil? then send_message(
+      'Сначала введи начало и конец семестров (/semester)')
+    else
+      day_start = Date.parse(@redis.hget("#{@user_id}-date", "begin"))
+      day_end = Date.parse(@redis.hget("#{@user_id}-date", "end"))
+      time_left(day_start, day_end)
+      send_message("Осталось времени #{@remainder} дней")
+      stack = @redis.hgetall("#{@user_id}-subj")
+      stack.each do |key, value|
+        calculator(value.to_i)
+        send_message("#{key} - #{@accomplished} из #{value} предметов должны быть уже сданы")
+      end
+    end
+  end
+end
+
 
 class Reset < BaseClass
   def run
+    @redis.del("#{@user_id}-date", "#{@user_id}-subj")
     send_message("#{@name}, Твои данные удалены")
   end
 end
@@ -132,7 +153,8 @@ Telegram::Bot::Client.run(TOKEN) do |bot|
       Reset.new(bot, message).run
     when '/subject'
       Subject.new(bot, message).run
-
+    when '/status'
+      Status.new(bot, message).run
     when '/stop'
       bot.api.send_message(
         chat_id: message.chat.id,
