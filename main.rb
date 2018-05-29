@@ -49,17 +49,50 @@ class BaseClass
     @accomplished = days_gone / days_per_task
   end
 
+
+  def telegram_send_message(text, marker, subjects_numlabs = nil)
+    case marker
+    when 'reset'
+      kb = [
+        Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Удаляем', callback_data: 'delete'),
+        Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Отмена', callback_data: 'cancel')
+      ]
+    when 'submit_list'
+      kb = []
+      subjects_hash = @redis.hgetall("#{@user_id}-subject")
+      subjects_hash.each do |key, value|
+        kb.push(Telegram::Bot::Types::InlineKeyboardButton.new(text: key, callback_data: key))
+      end
+    when 'submit_numlabs'
+      array_numbers_of_labs = @redis.hget("#{@user_id}-subject-numlab", subjects_numlabs).delete('[,]').split
+      kb = []
+      array_numbers_of_labs.each do |count|
+        kb.push(Telegram::Bot::Types::InlineKeyboardButton.new(text: count, callback_data: count))
+      end
+    end
+    markup = Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
+    @bot.api.send_message(chat_id: @user_id, text: text, reply_markup: markup)
+  end
+
+
+
 end
 
 class Start < BaseClass
   def run
-    send_message('Привет. Я тебе смогу помочь сдать все лабы, чтобы мамка не ругалась. Смотри список что я умею:
-/semester - запоминает даты начала и конца семестра
-/subject - добавляет предмет и количество лабораторных работ по нему
-/status - выводит твой список лаб, которые тебе предстоит сдать
-/reset - сбрасывает для пользователя все данные.')
+    send_message("Привет.\n#{Command_list}")
   end
 end
+
+
+Command_list = "Я тебе смогу помочь сдать все лабы, чтобы мамка не ругалась.\n
+Вот список того, что я умею:\n
+/start - Приветствие и отображение всех доступных команд
+/semester - запоминает даты начала и конца семестра
+/subject - добавляет предмет и количество лабораторных работ по нему
+/status -  выводит твой список лаб, которые тебе предстоит сдать
+/submit - Учитывает сдачу лабораторной работы
+/reset - Сбрасывает и удаляет все пользовательские данные".freeze
 
 class Semester < BaseClass
   def run
@@ -112,8 +145,6 @@ class Subject < BaseClass
   end
 end
 
-
-
 class Status < BaseClass
   def run
     if @redis.hget("#{@user_id}-date", "begin").nil? then send_message(
@@ -137,6 +168,49 @@ class Reset < BaseClass
   def run
     @redis.del("#{@user_id}-date", "#{@user_id}-subj")
     send_message("#{@name}, Твои данные удалены")
+  end
+end
+
+
+class Submit < BaseClass
+  def submit_message
+    if @redis.hgetall("#{@user_id}-subject") == {}
+      send_message("Список пуст.\nДобавить предмет и количество лабораторных работ по нему можно с помощью '/subject'")
+    else
+      telegram_send_message('Молодец! Какой предмет сдал(а)?', 'submit_list')
+    end
+  end
+
+  def submit_hundler(input)
+    input_submit = input
+    if /^[a-zA-Z]+$|^[а-яА-ЯЁё]+$/ =~ input_submit
+      @subject_name = input
+      if @redis.hget("#{@user_id}-subject-numlab", input).nil?
+        num_lab(input_submit)
+      elsif @redis.hget("#{@user_id}-subject-numlab", input) == '[]'
+        send_message('Ты уже рассчитался по этому предмету!')
+      else
+        telegram_send_message('Какая лаба?', 'submit_numlabs', input)
+      end
+    elsif /^\d(\d)*?$/ =~ input_submit
+      lab_remove(@subject_name, input)
+      send_message('Красавчег!')
+    end
+  end
+
+  def num_lab(name)
+    num = @redis.hget("#{@user_id}-subject", name).to_i
+    numlabs = (1..num).to_a
+    @redis.hset("#{@user_id}-subject-numlab", name, numlabs.to_s)
+    telegram_send_message('Какая лаба?', 'submit_numlabs', name)
+  end
+
+  def lab_remove(name, num_labs)
+    array_numbers_of_labs = @redis.hget("#{@user_id}-subject-numlab", name).delete('[,]').split
+    array_numbers_of_labs.delete(num_labs)
+    array_numbers_of_labs_numbers = []
+    array_numbers_of_labs.each { |unit| array_numbers_of_labs_numbers.push(unit.to_i) }
+    @redis.hset("#{@user_id}-subject-numlab", name, array_numbers_of_labs_numbers.to_s)
   end
 end
 
